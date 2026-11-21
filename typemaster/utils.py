@@ -24,3 +24,17 @@ def format_seconds(total: float) -> str:
     if minutes:
         return f"{minutes}m {seconds:02d}s"
     return f"{seconds}s"
+
+
+def board_labels(board: pd.DataFrame, me_id: int | None = None, mark_me: bool = True) -> list[str]:
+    """Display names for a leaderboard. Duplicate names get ``#id`` so players stay distinguishable."""
+    if board.empty:
+        return []
+    counts = board["player"].str.lower().value_counts()
+    labels = []
+    for name, pid in zip(board["player"], board["player_id"]):
+        label = f"{name} #{pid}" if counts[name.lower()] > 1 else name
+        if mark_me and me_id is not None and pid == me_id:
+            label += " (you)"
+        labels.append(label)
+    return labels

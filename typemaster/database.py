@@ -27,7 +27,8 @@ class DatabaseError(RuntimeError):
 @dataclass(frozen=True)
 class Player:
     id: int
-    name: str
+    name: str                     # display name: NOT unique, many players may share it
+    email: Optional[str] = None   # verified Google email once the account is claimed; the real identity
 
 
 _DURATIONS_SQL = ",".join(str(d) for d in config.DURATIONS)
@@ -37,8 +38,10 @@ _MODES_SQL = ",".join(f"'{m}'" for m in config.MODES)
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS players (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-    created_at  TEXT    NOT NULL
+    name        TEXT    NOT NULL,
+    email       TEXT    COLLATE NOCASE,
+    created_at  TEXT    NOT NULL,
+    claimed_at  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS results (
@@ -69,7 +72,28 @@ _MIGRATIONS = {
     "mistakes_json": "ALTER TABLE results ADD COLUMN mistakes_json TEXT NOT NULL DEFAULT '{}'",
 }
 
+# v1 stored a UNIQUE name on players. Rebuild the table (keeping every id, so results stay linked)
+# to drop that constraint and add the email column.
+_REBUILD_PLAYERS = """
+PRAGMA foreign_keys = OFF;
+BEGIN;
+CREATE TABLE players_new (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL,
+    email       TEXT    COLLATE NOCASE,
+    created_at  TEXT    NOT NULL,
+    claimed_at  TEXT
+);
+INSERT INTO players_new (id, name, created_at) SELECT id, name, created_at FROM players;
+DROP TABLE players;
+ALTER TABLE players_new RENAME TO players;
+COMMIT;
+PRAGMA foreign_keys = ON;
+"""
+
 INDEXES = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_players_email ON players (email) WHERE email IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_players_name ON players (name COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS idx_results_player_time ON results (player_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_results_wpm ON results (wpm DESC);
 CREATE INDEX IF NOT EXISTS idx_results_daily ON results (mode, challenge_date, wpm DESC);
@@ -79,7 +103,7 @@ HISTORY_COLUMNS = [
     "id", "created_at", "duration_sec", "difficulty", "wpm", "raw_wpm", "accuracy",
     "correct_chars", "incorrect_chars", "typed_chars", "elapsed_sec", "mode", "challenge_date",
 ]
-LEADERBOARD_COLUMNS = ["player", "wpm", "accuracy", "duration_sec", "difficulty", "created_at"]
+LEADERBOARD_COLUMNS = ["player", "wpm", "accuracy", "duration_sec", "difficulty", "created_at", "player_id"]
 COMPETITIVE = "mode IN ('standard', 'daily')"   # Key Doctor drills never reach records or boards
 
 
@@ -102,7 +126,7 @@ _RANKED_SQL = """WITH ranked AS (
        WHERE {where}
    )
    SELECT p.name AS player, ranked.wpm, ranked.accuracy, ranked.duration_sec,
-          ranked.difficulty, ranked.created_at
+          ranked.difficulty, ranked.created_at, p.id AS player_id
    FROM ranked JOIN players p ON p.id = ranked.player_id
    WHERE ranked.rn = 1
    ORDER BY ranked.wpm DESC, ranked.accuracy DESC, ranked.created_at ASC
@@ -144,6 +168,10 @@ class Database:
             except sqlite3.Error:
                 pass  # WAL is a nice-to-have (e.g. unsupported on some network drives)
             conn.executescript(SCHEMA)
+            player_cols = {row["name"] for row in conn.execute("PRAGMA table_info(players)")}
+            if "email" not in player_cols:
+                conn.commit()
+                conn.executescript(_REBUILD_PLAYERS)
             existing = {row["name"] for row in conn.execute("PRAGMA table_info(results)")}
             for column, statement in _MIGRATIONS.items():
                 if column not in existing:
@@ -151,16 +179,79 @@ class Database:
             conn.executescript(INDEXES)
 
     # ------------------------------------------------------------------ players
+    @staticmethod
+    def _player(row: sqlite3.Row) -> Player:
+        return Player(id=row["id"], name=row["name"], email=row["email"])
+
     def get_or_create_player(self, name: str) -> Player:
+        """Local (no-login) mode: the unclaimed profile with this name, created on first use."""
         with self.connect() as conn:
-            conn.execute("INSERT OR IGNORE INTO players (name, created_at) VALUES (?, ?)", (name, _now()))
-            row = conn.execute("SELECT id, name FROM players WHERE name = ? COLLATE NOCASE", (name,)).fetchone()
-        return Player(id=row["id"], name=row["name"])
+            row = conn.execute(
+                "SELECT id, name, email FROM players WHERE name = ? COLLATE NOCASE AND email IS NULL ORDER BY id LIMIT 1",
+                (name,),
+            ).fetchone()
+            if row is None:
+                cur = conn.execute("INSERT INTO players (name, created_at) VALUES (?, ?)", (name, _now()))
+                row = conn.execute("SELECT id, name, email FROM players WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return self._player(row)
 
     def get_player(self, player_id: int) -> Optional[Player]:
         with self.connect() as conn:
-            row = conn.execute("SELECT id, name FROM players WHERE id = ?", (player_id,)).fetchone()
-        return Player(id=row["id"], name=row["name"]) if row else None
+            row = conn.execute("SELECT id, name, email FROM players WHERE id = ?", (player_id,)).fetchone()
+        return self._player(row) if row else None
+
+    def get_player_by_email(self, email: str) -> Optional[Player]:
+        with self.connect() as conn:
+            row = conn.execute("SELECT id, name, email FROM players WHERE email = ? COLLATE NOCASE", (email.strip(),)).fetchone()
+        return self._player(row) if row else None
+
+    def create_account(self, name: str, email: str) -> Player:
+        """Create a player bound to a verified email. Returns the existing one if the email is already registered."""
+        email = email.strip().lower()
+        with self.connect() as conn:
+            try:
+                cur = conn.execute(
+                    "INSERT INTO players (name, email, created_at, claimed_at) VALUES (?, ?, ?, ?)",
+                    (name, email, _now(), _now()),
+                )
+            except sqlite3.IntegrityError:           # unique email: someone registered it a moment ago
+                row = conn.execute("SELECT id, name, email FROM players WHERE email = ? COLLATE NOCASE", (email,)).fetchone()
+                return self._player(row)
+            row = conn.execute("SELECT id, name, email FROM players WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return self._player(row)
+
+    def find_unclaimed(self, name: str) -> list[dict[str, Any]]:
+        """Old name-only profiles matching ``name`` that nobody has claimed yet, with a stats preview."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                """SELECT p.id, p.name, COUNT(r.id) AS tests, COALESCE(MAX(r.wpm), 0) AS best_wpm
+                   FROM players p LEFT JOIN results r ON r.player_id = p.id
+                   WHERE p.name = ? COLLATE NOCASE AND p.email IS NULL
+                   GROUP BY p.id ORDER BY tests DESC, p.id""",
+                (name.strip(),),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def claim_player(self, player_id: int, email: str) -> bool:
+        """Attach a verified email to an unclaimed profile. Atomic: only one account can ever win it."""
+        with self.connect() as conn:
+            try:
+                cur = conn.execute(
+                    "UPDATE players SET email = ?, claimed_at = ? WHERE id = ? AND email IS NULL",
+                    (email.strip().lower(), _now(), player_id),
+                )
+            except sqlite3.IntegrityError:           # this email already owns another account
+                return False
+            return cur.rowcount == 1
+
+    def rename_player(self, player_id: int, name: str) -> None:
+        with self.connect() as conn:
+            conn.execute("UPDATE players SET name = ? WHERE id = ?", (name, player_id))
+
+    def delete_player(self, player_id: int) -> None:
+        """Permanently delete an account and (via ON DELETE CASCADE) all of its results."""
+        with self.connect() as conn:
+            conn.execute("DELETE FROM players WHERE id = ?", (player_id,))
 
     # ------------------------------------------------------------------ results
     def save_result(

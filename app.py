@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import streamlit as st
 
-from typemaster import config, splash, ui
+from typemaster import auth, config, splash, ui
 from typemaster.database import Database, DatabaseError
 from typemaster.state import get_player, init_state, reset_test, set_player
 from typemaster.styles import inject_css
 from typemaster.validators import ValidationError, validate_player_name
-from typemaster.views import dashboard, daily, home, keydoctor, leaderboard, practice, profile, rails, rewards
+from typemaster.views import account, dashboard, daily, home, keydoctor, leaderboard, practice, profile, rails, rewards
 
 try:
     from PIL import Image
@@ -55,16 +55,18 @@ def _brand() -> None:
 
 
 def _welcome(db: Database) -> None:
+    """Local mode only (no Google login configured): choose a player name."""
     ui.html_block(
         f'<div class="tm-hero"><div class="tm-hero-main"><div class="tm-brand"><div class="tm-logo">TM</div>'
         f'<div class="tm-title">{config.APP_NAME}</div></div>'
         f'<h1>Your keyboard, <em>mastered.</em></h1>'
-        f'<p>Daily challenges, a weak-key doctor, ghost races against your best run, XP and streaks. Free to start, no sign-up.</p>'
+        f'<p>Daily challenges, a weak-key doctor, ghost races against your best run, XP and streaks.</p>'
         f'<div class="tm-demo"><span class="ok">Practice makes permanent, so practice </span>'
         f'<span class="bad">c</span><span class="ok">arefully</span><span class="caret"></span></div></div>'
         f'<div class="tm-hero-side"><h4>Who is typing?</h4>'
-        f'<div class="tm-mini"><span>Your name keeps your scores, streaks and badges, and puts you on the leaderboard.</span></div></div></div>'
+        f'<div class="tm-mini"><span>Your name keeps your scores, streaks and badges.</span></div></div></div>'
     )
+    account.local_notice()
     with st.form("welcome_form"):
         name = st.text_input("Player name", max_chars=config.NAME_MAX, placeholder="e.g. Ritesh")
         submitted = st.form_submit_button("Enter TypeMaster", type="primary")
@@ -76,6 +78,36 @@ def _welcome(db: Database) -> None:
             st.rerun()
     ui.html_block(f'<div class="tm-footer"><div><b>{config.APP_NAME}</b></div>'
                   f'<div>{config.FOUNDER_TITLE}: <b>{ui.esc(config.FOUNDER_NAME)}</b></div></div>')
+
+
+def _resolve_player(db: Database, auth_on: bool):
+    """Return the signed-in Player, or render the right sign-in screen and return None."""
+    if not auth_on:                                   # local / development mode
+        player = get_player()
+        if player is None and st.query_params.get("player"):
+            if _sign_in(db, st.query_params["player"]) is None:
+                player = get_player()
+        if player is None:
+            _welcome(db)
+        return player
+
+    user = auth.current_user()
+    if user is None:
+        account.login_screen()
+        return None
+    if not user.verified:
+        _brand()
+        ui.error_state("Your Google email is not verified", "Verify your email with Google, then sign in again.")
+        return None
+    player = get_player()
+    if player is None or (player.email or "") != user.email:
+        player = db.get_player_by_email(user.email)
+        if player is None:
+            st.session_state.player = None          # never keep a previous account's data around
+            account.onboarding(db, user)
+            return None
+        set_player(player)
+    return player
 
 
 def main() -> None:
@@ -96,28 +128,16 @@ def main() -> None:
                        f"Check that the folder {config.DB_PATH.parent} exists and is writable, then reload.")
         st.stop()
 
-    player = get_player()
-    if player is None and st.query_params.get("player"):
-        if _sign_in(db, st.query_params["player"]) is None:
-            player = get_player()
+    auth_on = auth.is_configured()
+    player = _resolve_player(db, auth_on)
     if player is None:
-        _welcome(db)
         return
 
     brand_col, player_col = st.columns([4, 1.3], vertical_alignment="center")
     with brand_col:
         _brand()
     with player_col:
-        with ui.call_stretch(st.popover, player.name):
-            with st.form("switch_player"):
-                new_name = st.text_input("Player name", value=player.name, max_chars=config.NAME_MAX)
-                switch = st.form_submit_button("Switch player")
-            if switch:
-                error = _sign_in(db, new_name)
-                if error:
-                    st.error(error)
-                else:
-                    st.rerun()
+        account.menu(db, player, auth_on, _sign_in)
 
     page = st.radio("Navigate", list(PAGES), horizontal=True, key="nav", label_visibility="collapsed")
     ss = st.session_state

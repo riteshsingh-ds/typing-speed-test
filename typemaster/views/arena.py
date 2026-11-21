@@ -159,9 +159,9 @@ def _finished(db: Database, player: Player) -> None:
     if result.mode == "daily" and result.saved:
         try:
             board = db.daily_leaderboard(result.challenge_date)
-            names = [n.lower() for n in board["player"]]
-            if player.name.lower() in names:
-                gains.append(ui.badge(f"Today's rank: #{names.index(player.name.lower()) + 1} of {len(names)}", "amber"))
+            ids = list(board["player_id"])
+            if player.id in ids:
+                gains.append(ui.badge(f"Today's rank: #{ids.index(player.id) + 1} of {len(ids)}", "amber"))
         except DatabaseError:
             pass
     if gains:

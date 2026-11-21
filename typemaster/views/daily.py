@@ -8,6 +8,7 @@ import streamlit as st
 from .. import config, ui
 from ..database import Database, DatabaseError, Player
 from ..passages import daily_challenge
+from ..utils import board_labels
 from . import arena
 
 
@@ -43,7 +44,7 @@ def render(db: Database, player: Player) -> None:
         return
     table = board.assign(
         Rank=[{1: "1st", 2: "2nd", 3: "3rd"}.get(i, f"{i}th") for i in range(1, len(board) + 1)],
-        Player=[p + (" (you)" if p.lower() == player.name.lower() else "") for p in board["player"]],
+        Player=board_labels(board, player.id),
     )[["Rank", "Player", "wpm", "accuracy"]]
     table.columns = ["Rank", "Player", "WPM", "Accuracy"]
     ui.show_table(table, column_config={

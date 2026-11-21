@@ -25,6 +25,33 @@ persistent history, analytics charts and a leaderboard.
 Pages: Home, Practice, Daily, Key Doctor, Progress (level, streaks, history), Rewards (badges, certificates, verify), Analytics, Leaderboard.
 Key Doctor drills are practice only: they never count towards records or leaderboards.
 
+## Accounts and sign-in
+
+TypeMaster uses **Google login** (Streamlit's built-in OpenID Connect). A player is identified by their verified
+Google email, so display names are not unique: any number of people can be called "Ritesh". Leaderboards add `#id`
+to duplicate names, and "(you)" is matched by account, never by name.
+
+**Turn it on (about 5 minutes):**
+1. Google Cloud Console > APIs & Services > Credentials > *Create OAuth client ID* > *Web application*.
+2. Add the authorised redirect URI `http://localhost:8501/oauth2callback` (and `https://YOUR-DOMAIN/oauth2callback` for your live site).
+3. Copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml` and fill in the client id, client secret and a long random `cookie_secret`.
+4. `pip install -r requirements.txt` (includes Authlib) and run `streamlit run app.py`.
+
+On Streamlit Community Cloud paste the same `[auth]` block into *App settings > Secrets*.
+
+Without a `secrets.toml` the app runs in **local mode** (type a name, no protection) so development still works.
+Force it with `TYPEMASTER_AUTH=off`.
+
+**First login with a new email** shows a one-time screen: *Create my account*, or *Claim my old profile* for people
+who played before accounts existed (they enter their old name, see their stats as proof, and attach it to their
+Google account, keeping every score, badge and certificate). A profile can be claimed only once, atomically.
+Set `TYPEMASTER_ALLOW_CLAIM=0` once your early players have migrated to close this door.
+
+The account menu (your name, top right) lets you rename yourself, sign out, or delete your account and all data.
+Existing databases are migrated automatically (the old unique-name rule is removed, scores are kept).
+
+Privacy: emails are stored only to recognise returning players and are never shown to other players.
+
 ## Quick start
 
 Requires **Python 3.10 or newer**.
@@ -61,6 +88,7 @@ typemaster/
 │   ├── database.py             # SQLite schema + queries
 │   ├── metrics.py              # WPM / accuracy maths (pure functions)
 │   ├── validators.py           # player-name and result-payload validation
+│   ├── auth.py                 # adapter over st.login / st.user
 │   ├── services.py             # validate -> score -> save pipeline, PB / XP / badge logic
 │   ├── progress.py             # XP, levels, streaks, achievements, weak-key ranking
 │   ├── drills.py               # Key Doctor drill builder
@@ -73,7 +101,7 @@ typemaster/
 │   ├── state.py                # session-state helpers
 │   ├── styles.py               # global CSS
 │   ├── ui.py                   # cards, empty/error states, Streamlit compat helpers
-│   └── views/                  # home, practice, daily, keydoctor, profile, rewards, rails, dashboard, history, leaderboard, arena
+│   └── views/                  # account, home, practice, daily, keydoctor, profile, rewards, rails, dashboard, history, leaderboard, arena
 ├── tests/                      # pytest suite + jsdom tests for the typing engine
 ├── assets/                     # favicon + bundled fonts (Poppins, Lora, DejaVu Mono) for certificates
 └── data/                       # SQLite database is created here
@@ -116,7 +144,7 @@ If you finish the whole passage before time runs out, the test ends early and th
 ## Testing
 
 ```bash
-# Python: maths, validation, database + migration, XP/streaks/badges, drills, UI flows (139 tests)
+# Python: maths, validation, database + migration, XP/streaks/badges, drills, UI flows (157 tests)
 pytest
 
 # Typing engine in a simulated browser (needs Node.js 18+, one-time install)
@@ -164,4 +192,5 @@ rejection, paste blocking and "reruns never reset the timer".
 - **Typing area says "Click here"**: click inside it once; browsers sometimes block automatic focus.
 - **Fonts look different offline**: the app uses Google Fonts and falls back to system fonts without internet.
 - **`database is locked`**: close other programs that have `typemaster.db` open (for example a DB browser).
-- **Player names** are not password-protected; they simply group scores. Anyone using the same name shares history.
+- **Login button does nothing / error about Authlib**: run `pip install Authlib`, and check the redirect URI in Google Cloud matches `secrets.toml` exactly.
+- **Local mode**: without Google login configured, names are not protected (development only).

@@ -5,3 +5,4 @@ data/*.db
 data/*.db-*
 tests/js/node_modules/
 .pytest_cache/
+.streamlit/secrets.toml

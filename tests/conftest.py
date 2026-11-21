@@ -1,5 +1,6 @@
 import os
 os.environ.setdefault("TYPEMASTER_SPLASH", "0")
+os.environ.setdefault("TYPEMASTER_AUTH", "off")   # tests run in local mode unless they patch auth
 import os
 import sys
 import tempfile

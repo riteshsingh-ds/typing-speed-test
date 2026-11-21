@@ -6,6 +6,7 @@ from datetime import date
 import streamlit as st
 
 from .. import config, ui
+from ..utils import board_labels
 from ..database import Database, DatabaseError, Player
 from ..progress import (BY_ID, earned_dates, level_info, next_streak_goal, practice_days, streaks, total_xp)
 from . import arena
@@ -76,8 +77,9 @@ def right(db: Database, player: Player) -> None:
             history = db.history(player.id)
         except DatabaseError:
             return
+        names = board_labels(board, player.id, mark_me=False)
         rows = "".join(
-            f'<div class="tm-rrow"><span>{i}. {ui.esc(r.player)}</span><b>{r.wpm:.0f}</b></div>'
+            f'<div class="tm-rrow"><span>{i}. {ui.esc(names[i - 1])}</span><b>{r.wpm:.0f}</b></div>'
             for i, r in enumerate(board.itertuples(index=False), start=1)
         ) or '<div class="tm-rsub">No scores yet. Be the first.</div>'
         ui.html_block(f'<div class="tm-rcard"><div class="tm-rtitle">Top typists</div>{rows}</div>')

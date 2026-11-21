@@ -7,7 +7,7 @@ from datetime import date
 
 from .. import config, ui
 from ..database import Database, DatabaseError, Player
-from ..utils import to_local
+from ..utils import board_labels, to_local
 
 _MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 
@@ -42,13 +42,13 @@ def render(db: Database, player: Player) -> None:
         )
         return
 
+    labels = board_labels(board, player.id)
     top = board.head(3)
     podium = []
     for rank, row in enumerate(top.itertuples(index=False), start=1):
-        you = " (you)" if row.player.lower() == player.name.lower() else ""
         podium.append(
             f'<div class="tm-card"><div class="tm-medal">{_MEDALS[rank]}</div>'
-            f'<div class="tm-name">{ui.esc(row.player + you)}</div>'
+            f'<div class="tm-name">{ui.esc(labels[rank - 1])}</div>'
             f'<div class="tm-value" style="color:var(--amber)">{row.wpm:.0f}</div>'
             f'<div class="tm-sub">WPM at {row.accuracy:.1f}% accuracy</div></div>'
         )
@@ -56,7 +56,7 @@ def render(db: Database, player: Player) -> None:
 
     table = board.assign(
         Rank=[_MEDALS.get(i, str(i)) for i in range(1, len(board) + 1)],
-        Player=[p + (" (you)" if p.lower() == player.name.lower() else "") for p in board["player"]],
+        Player=labels,
         Setup=[f"{d} sec, {diff}" for d, diff in zip(board["duration_sec"], board["difficulty"])],
         Date=to_local(board["created_at"]),
     )[["Rank", "Player", "wpm", "accuracy", "Setup", "Date"]]
@@ -84,7 +84,7 @@ def _daily(db: Database, player: Player) -> None:
         return
     table = board.assign(
         Rank=[_MEDALS.get(i, str(i)) for i in range(1, len(board) + 1)],
-        Player=[p + (" (you)" if p.lower() == player.name.lower() else "") for p in board["player"]],
+        Player=board_labels(board, player.id),
     )[["Rank", "Player", "wpm", "accuracy"]]
     table.columns = ["Rank", "Player", "WPM", "Accuracy"]
     ui.show_table(table, column_config={
