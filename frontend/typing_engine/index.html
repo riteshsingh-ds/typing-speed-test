@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<title>TypeMaster typing engine</title>
+<style>
+:root {
+  --panel: #141922; --panel-2: #1a202b; --line: #252c3a;
+  --text: #e9e6de; --muted: #5d667c; --label: #8089a0;
+  --amber: #ffb454; --mint: #5ee3a1; --coral: #ff6b6b; --sky: #6bc7ff;
+  --display: 'Bricolage Grotesque', 'Segoe UI', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+  --fs: 24px; --lh: 1.85;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: transparent; color: var(--text);
+  font-family: var(--display); -webkit-font-smoothing: antialiased; }
+.tm { padding: 2px 2px 6px; }
+
+.stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px; min-width: 0; }
+.lbl { display: block; font-size: 12.5px; color: var(--label); font-weight: 500; }
+.val { display: block; font-family: var(--mono); font-size: 27px; font-weight: 700; line-height: 1.2;
+  margin-top: 2px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#timeCard .val { color: var(--amber); }
+#timeCard.warn .val { color: var(--coral); animation: pulse 1s ease-in-out infinite; }
+#corCard .val { color: var(--mint); }
+#misCard .val { color: var(--coral); }
+#pbCard.beat { border-color: rgba(94,227,161,.6); }
+#pbCard.beat .val { color: var(--mint); }
+
+.bar { height: 4px; background: rgba(255,255,255,.07); border-radius: 99px; overflow: hidden; margin: 0 2px 12px; }
+.bar > i { display: block; height: 100%; width: 0; background: var(--amber); transition: width .2s linear; }
+
+.stage { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
+  padding: 22px 26px; cursor: text; overflow: hidden; transition: border-color .15s, box-shadow .15s; }
+.stage.focus { border-color: rgba(255,180,84,.6); box-shadow: 0 0 0 4px rgba(255,180,84,.10); }
+.viewport { height: calc(var(--fs) * var(--lh) * 3); overflow: hidden; position: relative; }
+.text { position: relative; font-family: var(--mono); font-size: var(--fs); line-height: var(--lh);
+  white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; color: var(--muted);
+  transition: transform .16s ease; user-select: none; -webkit-user-select: none; }
+.c { position: relative; }
+.c.ok { color: var(--mint); }
+.c.bad { color: var(--coral); background: rgba(255,107,107,.16); border-radius: 3px; }
+.c.cur::before { content: ""; position: absolute; left: -1px; top: 14%; height: 72%; width: 2px;
+  background: var(--amber); border-radius: 1px; animation: blink 1s steps(1) infinite; }
+.stage:not(.focus) .c.cur::before { animation: none; opacity: .45; }
+
+#input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; resize: none; border: 0;
+  outline: 0; background: transparent; color: transparent; caret-color: transparent; font-size: 16px;
+  z-index: 3; cursor: text; padding: 0; margin: 0; }
+.overlay { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center;
+  text-align: center; padding: 0 24px; background: rgba(13,16,22,.62); backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px); font-weight: 600; font-size: 16px; color: #d6d3ca;
+  opacity: 0; pointer-events: none; transition: opacity .15s; }
+.stage.unfocused .overlay, .stage.done .overlay, .loading .overlay { opacity: 1; }
+.stage.done { cursor: default; }
+
+.hint { margin: 10px 4px 0; font-size: 13px; color: var(--label); }
+
+@keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+@keyframes pulse { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .text, .bar > i { transition: none; } #timeCard.warn .val { animation: none; } }
+
+@media (max-width: 760px) {
+  :root { --fs: 18px; }
+  .stats { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .val { font-size: 21px; }
+  .stage { padding: 16px; border-radius: 14px; }
+}
+@media (max-width: 420px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<div id="app" class="tm loading">
+  <div class="stats">
+    <div class="card" id="timeCard"><span class="lbl">Time left</span><span class="val" id="time">--</span></div>
+    <div class="card"><span class="lbl">Speed (WPM)</span><span class="val" id="wpm">0</span></div>
+    <div class="card"><span class="lbl">Accuracy</span><span class="val" id="acc">--</span></div>
+    <div class="card" id="corCard"><span class="lbl">Correct chars</span><span class="val" id="cor">0</span></div>
+    <div class="card" id="misCard"><span class="lbl">Mistakes</span><span class="val" id="mis">0</span></div>
+    <div class="card" id="pbCard"><span class="lbl">Personal best</span><span class="val" id="pb">--</span></div>
+  </div>
+  <div class="bar"><i id="bar"></i></div>
+  <div class="stage" id="stage">
+    <div class="viewport" id="viewport"><div class="text" id="text"></div></div>
+    <textarea id="input" aria-label="Typing input" autocomplete="off" autocorrect="off"
+      autocapitalize="off" spellcheck="false" rows="1"></textarea>
+    <div class="overlay" id="overlay">Loading typing engine...</div>
+  </div>
+  <div class="hint" id="hint">The timer starts with your first keystroke. Backspace fixes mistakes. Finish the text to end early.</div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var MAX_SERIES = 125;
+  var $ = function (id) { return document.getElementById(id); };
+  var el = {
+    app: $("app"), time: $("time"), timeCard: $("timeCard"), wpm: $("wpm"), acc: $("acc"),
+    cor: $("cor"), mis: $("mis"), pb: $("pb"), pbCard: $("pbCard"), bar: $("bar"),
+    stage: $("stage"), text: $("text"), input: $("input"), overlay: $("overlay")
+  };
+
+  function fresh() {
+    return { testId: null, text: "", duration: 60, mode: "ready", startTime: 0, typed: "",
+             series: [], timer: null, chars: [], pb: null, focused: false, wrong: {} };
+  }
+  var S = fresh();
+
+  /* ------------------------------------------------------------ Streamlit protocol */
+  function post(type, data) {
+    var msg = { isStreamlitMessage: true, type: type };
+    for (var k in data) { if (Object.prototype.hasOwnProperty.call(data, k)) msg[k] = data[k]; }
+    window.parent.postMessage(msg, "*");
+  }
+  function setFrameHeight() {
+    var h = Math.ceil(el.app.getBoundingClientRect().height) + 8;
+    post("streamlit:setFrameHeight", { height: h });
+  }
+
+  /* ------------------------------------------------------------------- maths */
+  function counts(typed, text) {
+    var ok = 0;
+    for (var i = 0; i < typed.length; i++) { if (typed.charCodeAt(i) === text.charCodeAt(i)) ok++; }
+    return { correct: ok, wrong: typed.length - ok };
+  }
+  // Net WPM: (correct chars / 5) per minute. Elapsed time is floored at 1s for display stability.
+  function netWpm(correct, ms) {
+    var sec = Math.max(ms / 1000, 1);
+    return (correct / 5) / (sec / 60);
+  }
+  function round1(n) { return Math.round(n * 10) / 10; }
+
+  /* --------------------------------------------------------------- rendering */
+  function buildChars() {
+    el.text.innerHTML = "";
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < S.text.length; i++) {
+      var s = document.createElement("span");
+      s.className = "c";
+      s.textContent = S.text.charAt(i);
+      frag.appendChild(s);
+    }
+    el.text.appendChild(frag);
+    S.chars = Array.prototype.slice.call(el.text.children);
+    el.text.style.transform = "";
+  }
+
+  function renderChars() {
+    var t = S.typed, text = S.text, chars = S.chars;
+    for (var i = 0; i < chars.length; i++) {
+      var cls = "c";
+      if (i < t.length) cls += (t.charCodeAt(i) === text.charCodeAt(i)) ? " ok" : " bad";
+      else if (i === t.length) cls += " cur";
+      if (chars[i].className !== cls) chars[i].className = cls;
+    }
+    keepCursorInView();
+  }
+
+  function keepCursorInView() {
+    var node = S.chars[Math.min(S.typed.length, S.chars.length - 1)];
+    if (!node) return;
+    var lh = parseFloat(window.getComputedStyle(el.text).lineHeight) || 40;
+    var shift = Math.max(0, node.offsetTop - lh); // keep the active line on the 2nd visible row
+    el.text.style.transform = "translateY(" + (-shift) + "px)";
+  }
+
+  function renderStats(elapsed) {
+    var c = counts(S.typed, S.text);
+    var typedLen = S.typed.length;
+    var live = typedLen ? netWpm(c.correct, elapsed) : 0;
+    el.wpm.textContent = String(Math.round(live));
+    el.acc.textContent = typedLen ? (Math.round(c.correct / typedLen * 1000) / 10).toFixed(1) + "%" : "--";
+    el.cor.textContent = String(c.correct);
+    el.mis.textContent = String(c.wrong);
+
+    var left = Math.max(0, Math.ceil((S.duration * 1000 - elapsed) / 1000));
+    el.time.textContent = left + "s";
+    el.timeCard.classList.toggle("warn", S.mode === "running" && left <= 5);
+    el.bar.style.width = Math.min(100, elapsed / (S.duration * 1000) * 100) + "%";
+
+    el.pb.textContent = S.pb === null ? "--" : String(Math.round(S.pb));
+    el.pbCard.classList.toggle("beat", S.pb !== null && elapsed >= 5000 && live > S.pb);
+    return { live: live, counts: c };
+  }
+
+  function paintStage() {
+    var cls = "stage " + S.mode + (S.focused ? " focus" : " unfocused");
+    if (el.stage.className !== cls) el.stage.className = cls;
+    if (S.mode === "done") return;
+    el.overlay.textContent = S.mode === "ready"
+      ? "Click here and start typing. The timer begins on your first key."
+      : "Click here to keep typing. The timer is still running.";
+  }
+
+  /* ------------------------------------------------------------- test control */
+  function sample(elapsed) {
+    var secs = Math.floor(elapsed / 1000);
+    while (S.series.length < secs && S.series.length < MAX_SERIES) {
+      S.series.push(round1(netWpm(counts(S.typed, S.text).correct, elapsed)));
+    }
+  }
+
+  function startTimer(now) {
+    S.mode = "running";
+    S.startTime = now;
+    S.timer = setInterval(tick, 100);
+    paintStage();
+  }
+
+  function tick() {
+    if (S.mode !== "running") return;
+    var elapsed = performance.now() - S.startTime;
+    if (elapsed >= S.duration * 1000) { finish("time"); return; }
+    sample(elapsed);
+    renderStats(elapsed);
+  }
+
+  function finish(reason) {
+    if (S.mode === "done") return;
+    var elapsed = Math.min(performance.now() - S.startTime, S.duration * 1000);
+    clearInterval(S.timer);
+    S.mode = "done";
+    el.input.disabled = true;
+    el.input.blur();
+    S.focused = false;
+    sample(elapsed);
+    renderChars();
+    var r = renderStats(elapsed);
+    el.overlay.textContent = reason === "completed"
+      ? "Text completed. Saving your result..."
+      : "Time is up. Saving your result...";
+    paintStage();
+
+    var typedLen = S.typed.length;
+    post("streamlit:setComponentValue", {
+      dataType: "json",
+      value: {
+        test_id: S.testId,
+        typed: S.typed,
+        elapsed_ms: Math.round(elapsed),
+        series: S.series.slice(),
+        ever_wrong: Object.keys(S.wrong).map(Number).sort(function (a, b) { return a - b; }),
+        reason: reason,
+        client: {
+          wpm: round1(r.live),
+          accuracy: typedLen ? Math.round(r.counts.correct / typedLen * 10000) / 100 : 0
+        }
+      }
+    });
+  }
+
+  function onInput() {
+    if (S.mode === "done") return;
+    var now = performance.now();
+    var v = el.input.value.replace(/[\r\n]+/g, "");
+    if (S.mode === "ready") {
+      if (v.length === 0) { el.input.value = ""; return; }
+      startTimer(now);
+    }
+    var elapsed = now - S.startTime;
+    if (elapsed >= S.duration * 1000) {          // keystroke arrived after the buzzer: ignore it
+      el.input.value = S.typed;
+      finish("time");
+      return;
+    }
+    if (v.length > S.text.length) v = v.slice(0, S.text.length);
+    if (v !== el.input.value) el.input.value = v;
+    S.typed = v;
+    for (var i = 0; i < v.length; i++) {          // remember every position ever typed wrong, even if fixed later
+      if (v.charCodeAt(i) !== S.text.charCodeAt(i)) S.wrong[i] = 1;
+    }
+    sample(elapsed);
+    renderChars();
+    renderStats(elapsed);
+    if (v.length === S.text.length) finish("completed");
+  }
+
+  function init(args) {
+    clearInterval(S.timer);
+    S = fresh();
+    S.testId = args.test_id;
+    S.text = String(args.text || "");
+    S.duration = Number(args.duration) > 0 ? Number(args.duration) : 60;
+    S.pb = (args.personal_best === null || args.personal_best === undefined || isNaN(Number(args.personal_best)))
+      ? null : Number(args.personal_best);
+    S.focused = document.activeElement === el.input;
+
+    buildChars();
+    el.input.disabled = false;
+    el.input.value = "";
+    el.app.classList.remove("loading");
+    renderChars();
+    renderStats(0);
+    paintStage();
+    try { el.input.focus({ preventScroll: true }); } catch (e) { /* browsers may block auto-focus */ }
+    setTimeout(setFrameHeight, 0);
+  }
+
+  /* ------------------------------------------------------------------ events */
+  el.input.addEventListener("input", onInput);
+  el.input.addEventListener("focus", function () { S.focused = true; paintStage(); });
+  el.input.addEventListener("blur", function () { S.focused = false; paintStage(); });
+
+  ["paste", "cut", "copy", "drop", "dragstart", "contextmenu"].forEach(function (name) {
+    el.input.addEventListener(name, function (e) { e.preventDefault(); });
+  });
+  el.input.addEventListener("keydown", function (e) {
+    var blocked = ["Enter", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"];
+    if (blocked.indexOf(e.key) !== -1) e.preventDefault();
+  });
+  function caretToEnd() {
+    var n = el.input.value.length;
+    try { el.input.setSelectionRange(n, n); } catch (e) { /* not selectable while disabled */ }
+  }
+  ["click", "select", "focus", "mouseup", "touchend"].forEach(function (name) {
+    el.input.addEventListener(name, function () { setTimeout(caretToEnd, 0); });
+  });
+
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (!data || data.type !== "streamlit:render") return;
+    var args = data.args || {};
+    // Streamlit re-sends "render" on every rerun. Only a *new* test id re-initialises the arena,
+    // so reruns can never reset a running timer.
+    if (args.test_id !== S.testId) init(args);
+  });
+
+  if (window.ResizeObserver) { new ResizeObserver(setFrameHeight).observe(el.app); }
+  post("streamlit:componentReady", { apiVersion: 1 });
+  setFrameHeight();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+{
+  "name": "typemaster-engine-tests",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": { "test": "node engine.test.js" },
+  "devDependencies": { "jsdom": "^24.0.0" }
+}
